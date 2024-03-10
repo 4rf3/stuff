@@ -1,0 +1,218 @@
+﻿<!DOCTYPE html>
+<html>
+    <head>
+        <title>Страницы</title>
+        <style>
+            body {
+                padding: 0 5%;
+            }
+            div {
+                margin: 10px;
+            }
+            td {
+                padding: 5px;
+            }
+            input.tall, td input {
+                font-size: 12pt;
+                width: 100px;
+            }
+            label {
+                user-select: none;
+            }
+            span.gray {
+                color: #aaa;
+                user-select: none;
+            }
+            span.front {
+                color: teal;
+            }
+            span.back {
+                color: crimson;
+            }
+            p#pages-display, p#pages-example {
+                font-size: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Расчёт страниц</h1>
+        <p>Вычисляет порядок страниц для печати на типографском листе. Инструкция:</p>
+        <!--<p id="pages-example"><span class="gray"><sup>1</sup></span><span class="front">16,1,14,3</span>, <span class="back">2,15,4,13</span></p>-->
+        <img src="guide.svg">
+        <fieldset>
+            <legend><h2 style="margin: 0;">Конфигурация</h2></legend>
+            <div>
+                <h3>Страниц на листе:</h3>
+                <input type="radio" name="config" value="2" id="a4-2"><label for="a4-2">2 на листе А4 (формат А5)</label>
+                <input type="radio" name="config" value="4" id="a4-4" checked><label for="a4-4">4 на листе А4 (формат А6)</label>
+                <input type="radio" name="config" value="8" id="a4-8"><label for="a4-8">8 на листе А4 (формат А7)</label>
+            </div>
+            <table>
+                <tbody>
+                    <tr>
+                        <td><label for="start-page">Начинать со страницы:</label></td>
+                        <td><input type="number" id="start-page" class="tall" min="1" value="1"></td>
+                        <td><label for="end-page">До:</label></td>
+                        <td><input type="number" id="end-page" class="tall" min="1"></td>
+                        <td><label for="empty-page">Пустая:</label></td>
+                        <td><input type="text" id="empty-page" class="tall"></td>
+                    </tr>
+                    <tr>
+                        <td><label for="booklet-len">Страниц в тетради:</label></td>
+                        <td><input type="number" id="booklet-len" min="4" step="4" value="16"></td>
+                        <td colspan="3"/>
+                        <td><input type="button" id="calc" class="tall" style="width: 100%" onclick="calc()" value="Рассчитать"></td>
+                    </tr>
+                </tbody>                
+            </table>
+            <hr>
+            <div>
+                <h3>Параметры отображения:</h3>
+                <input type="checkbox" id="show-front" onclick="redraw()" checked><label for="show-front">Показывать лицевую сторону</label>
+                <input type="checkbox" id="show-back" onclick="redraw()" checked><label for="show-back">Показывать обратную сторону</label>
+                <input type="checkbox" id="reverse" onclick="redraw()"><label for="reverse">Обратить порядок листов</label>
+                <input type="checkbox" id="curvature" onclick="redraw()"><label for="curvature">Переставить аверс/реверс <i>(кривизна)</i></label>
+            </div>
+        </fieldset>
+        <div>
+            <h3>Страницы (<a href="javascript:copy_to_clipboard()">копировать</a>):</h3>
+            <p id="pages-display" />
+            <span class="gray"><sup>1</sup>[</span>...<span class="gray">|</span>...<span class="gray">|</span>...<span class="gray">]</span>
+        </div>
+        <script>
+            function range(start, stop, step=1) {
+                let arr = [];
+                for (let i = start; i < stop; i+=step) {
+                    arr.push(i);                  
+                }
+                return arr;
+            }
+            function fill_to_multiple(arr, mod, filler) {
+                if (arr.length % mod == 0) {
+                    return arr;
+                }
+                let extra = mod - arr.length % mod;
+                return arr.concat(Array(extra).fill(filler));
+            }
+            function $(sel) {
+                return document.querySelector(sel);
+            }
+            function $on(sel, event, fn) {
+                $(sel).addEventListener(event, fn);
+            }
+
+            $on('body', 'dblclick', function(event) {
+                let t = event.target
+                if (t.tagName == "LABEL") ('#' + t.htmlFor).value = '';
+            })
+
+            var empty_page = '-'; //global
+            function set_empty(n) {
+                empty_page = `<span style="text-decoration: line-through;">${n}</span>`;
+            }
+            function empty_fold() {return {f:[empty_page,empty_page],b:[empty_page,empty_page]}};
+            // order of folds on both sides
+            // - in which they are filled
+            const a4_2 = {f:[0],b:[0]};
+            const a4_4 = {f:[0,1],b:[0,1]};
+            const a4_8 = {f:[0,1,2,3],b:[1,0,3,2]};
+            function page_list(start, end) {
+                return range(start, end + 1);
+            }
+            function pages_partition(pages, booklet_len, booklet_max) {
+                pages = fill_to_multiple(pages, 4, empty_page);
+                let partition = [];
+                for (let i = pages.length; i >= 0; i -= booklet_len) {
+                    if (i > booklet_len) {
+                        partition.push(booklet_len);
+                    } else {
+                        partition.push(i);
+                    }
+                }
+
+                if (partition[partition.length-2] + partition[partition.length-1] <= booklet_max) {
+                    partition[partition.length-2] += partition[partition.length-1];
+                    partition.splice(-1, 1);
+                }
+
+                let booklet_pages = partition.map(len => pages.splice(0, len));
+                return booklet_pages;
+            }
+            function pages_to_folds(pages, booklet_id = 0) {
+                // pages.length % 4 assumed to be 0
+                let folds = [];
+                while (pages.length > 0) {
+                    let fold = pages.splice(0, 2).concat(pages.splice(-2, 2));
+                    fold = {f:[fold[3], fold[0]], b:[fold[1],fold[2]]};
+                    fold.info = {booklet_id: booklet_id};
+                    folds.push(fold);
+                }
+                return folds;
+            }
+            function folds_to_folios(folds, template) {
+                folds_in_folio = template.f.length;
+                folds = fill_to_multiple(folds, folds_in_folio, empty_fold());
+                folios = [];
+                for (let fs = 0; fs < folds.length; fs+=folds_in_folio) {
+                    let folio = {f:Array(folds_in_folio), b:Array(folds_in_folio)};
+                    for (let i = 0; i < folds_in_folio; i++) {
+                        folio.f[template.f[i]] = folds[fs + i].f;
+                        folio.b[template.b[i]] = folds[fs + i].b;
+                    }
+                    folio.info = {n_folio: fs / folds_in_folio + 1};
+                    folios.push(folio);
+                }
+                return(folios);
+            }
+
+            current_folios = []; // global
+            function calc() {
+                let end_page = +$('#end-page').value;
+                let booklet_len = +$('#booklet-len').value;
+                let start_page = +$('#start-page').value;
+                let template = a4_4;
+                if ($('#a4-2').checked) template = a4_2;
+                if ($('#a4-4').checked) template = a4_4;
+                if ($('#a4-8').checked) template = a4_8;
+                let pages = page_list(start_page, end_page);
+                set_empty($("#empty-page").value || end_page);
+                let booklets = pages_partition(pages, booklet_len, booklet_len * 1.4);
+                let folds = booklets.map(b => pages_to_folds(b)).flat(); 
+                let folios = folds_to_folios(folds, template);
+                current_folios = folios;
+                redraw();
+            }
+
+            function redraw() {
+                function sep_span(arr, style = '', sep = ',') {
+                    return `<span class="${style}">${arr.join(sep)}</span>`;
+                }
+                function _html(show_front, show_back, reverse, reverse_curvature) {
+                    if (!show_front && !show_back) return '';
+                    function _folio(_f) {
+                        let _1st = (show_front ? `${sep_span(_f.f, 'front')}` : '');
+                        let _2nd = (show_back ? `${sep_span(_f.b, 'back')}` : '');
+                        if (reverse_curvature) [_1st, _2nd] = [_2nd, _1st];
+                        return `<span class="gray"><sup>${_f.info.n_folio}</sup></span>`+
+                            _1st + (show_front && show_back ? ', ' : '') + _2nd;                
+                    }
+                    let fols = current_folios.slice();
+                    if (reverse) fols.reverse();
+                    fols.forEach((f, i) => f.info.n_folio = i + 1);
+                    return sep_span(fols.map(f => _folio(f)), '', ', ');
+                }
+                let show_front = $('#show-front').checked;
+                let show_back = $('#show-back').checked;
+                let reverse = $('#reverse').checked;
+                let reverse_curvature = $('#curvature').checked;
+                $('#pages-display').innerHTML = _html(show_front, show_back, reverse, reverse_curvature);
+            }
+            function copy_to_clipboard() {
+                navigator.clipboard.writeText(
+                    Array.from($('#pages-display').querySelectorAll('span.front, span.back'))
+                    .map(e => e.innerText).join(',')
+                )                
+            }
+        </script>
+    </body>
+</html>
